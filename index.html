@@ -2,20 +2,35 @@
 <html lang="fr">
 <head>
   <meta charset="utf-8" />
-  <title>Webcams + Refuges (enriched)</title>
+  <title>Sentinel-2 + Hillshade + BD ORTHO + Webcams & Refuges (HQ + fades)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <link href="https://unpkg.com/maplibre-gl@5.10.0/dist/maplibre-gl.css" rel="stylesheet" />
-  <script src="https://unpkg.com/maplibre-gl@5.10.0/dist/maplibre-gl.js"></script>
+  <!-- MapLibre & PMTiles -->
+  <link href="https://unpkg.com/maplibre-gl@5.10.0/dist/maplibre-gl.css" rel="stylesheet" crossorigin="anonymous"/>
+  <script src="https://unpkg.com/maplibre-gl@5.10.0/dist/maplibre-gl.js" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/pmtiles@4.1.0/dist/pmtiles.js"></script>
   <style>
-    html, body, #map { height: 100%; margin: 0; }
+    html, body, #map { height: 100%; width: 100%; margin: 0; }
 
+    /* Panneau de contrôle */
+    .ctrl {
+      position: absolute; z-index: 10; top: 10px; left: 10px;
+      background: rgba(255,255,255,.92); padding: 8px 10px; border-radius: 10px;
+      font-family: system-ui, sans-serif; font-size: 13px;
+      box-shadow: 0 2px 12px rgba(0,0,0,.15); display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
+    }
+    .btn { cursor: pointer; padding: 6px 10px; border-radius: 8px; border: 1px solid #ddd; background: #fff; }
+    .btn:hover { background: #f6f6f6; }
+    .range { display:flex; align-items:center; gap:6px; }
+    .range input[type="range"] { width: 140px; }
+    .chk { display:flex; align-items:center; gap:6px; }
+
+    /* --- Styles Webcams/Refuges (DOM markers & viewer) --- */
     .cam-wrap { position: relative; width: 36px; height: 36px; }
     .cam-fov { position: absolute; left: -6px; top: -6px; width: 48px; height: 48px; border-radius: 50%; opacity: .35; pointer-events: none; z-index: 0; }
     .cam-marker { position: relative; width: 36px; height: 36px; border-radius: 50%; overflow: hidden; border: 2px solid #fff; box-shadow: 0 2px 10px rgba(0,0,0,.25); background: #eee center/cover no-repeat; cursor: pointer; z-index: 1; }
     .cam-marker img { width: 100%; height: 100%; object-fit: cover; display: block; }
     .cluster-marker { position: relative; width: 36px; height: 36px; border-radius: 6px; overflow: hidden; border: 2px solid #fff; box-shadow: 0 2px 10px rgba(0,0,0,.25); background: #eee center/cover no-repeat; cursor: pointer; z-index: 1; }
     .cluster-marker img { width: 100%; height: 100%; object-fit: cover; display: block; }
-
     .cluster-wrap { display: inline-flex; flex-direction: column; align-items: center; }
     .cluster-count { margin-top: 3px; padding: 1px 5px; border-radius: 999px; background: rgba(0,0,0,.75); color: #fff; font: 600 11px/1 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; backdrop-filter: blur(2px); pointer-events: none; }
 
@@ -37,16 +52,12 @@
     #viewer .counter { position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,.7); color: #fff; padding: 4px 12px; border-radius: 999px; font: 600 12px system-ui; pointer-events: none; }
     #viewer .thumbnails { display: flex; gap: 8px; overflow-x: auto; padding: 8px 4px; max-width: 100%; scroll-behavior: smooth; justify-content: center; }
     #viewer .thumbnails::-webkit-scrollbar { height: 6px; }
-    #viewer .thumbnails::-webkit-scrollbar-track { background: rgba(255,255,255,.1); border-radius: 3px; }
-    #viewer .thumbnails::-webkit-scrollbar-thumb { background: rgba(255,255,255,.3); border-radius: 3px; }
-    #viewer .thumbnails::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,.5); }
     #viewer .thumb { width: 80px; height: 60px; border-radius: 6px; object-fit: cover; cursor: pointer; opacity: 0.6; transition: opacity 0.2s, transform 0.2s; border: 2px solid transparent; flex-shrink: 0; }
     #viewer .thumb:hover { opacity: 0.9; transform: scale(1.05); }
     #viewer .thumb.active { opacity: 1; border-color: #fff; }
     #viewer .open-link { position: absolute; right: 10px; top: 10px; width: 36px; height: 36px; border-radius: 8px; background: rgba(0,0,0,.65); display: grid; place-items: center; z-index: 11; }
     #viewer .open-link svg { width: 20px; height: 20px; fill: #fff; opacity: .95; }
     #viewer .close-btn { background: none; border: none; color: #fff; font-size: 28px; cursor: pointer; padding: 4px 8px; line-height: 1; opacity: 0.8; transition: opacity 0.2s; }
-    #viewer .close-btn:hover { opacity: 1; }
     .hidden { display: none !important; }
 
     /* Refuges */
@@ -58,6 +69,8 @@
 </head>
 <body>
 <div id="map"></div>
+
+<!-- UI overlay webcams/refuges -->
 <div id="hoverPreview" aria-hidden="true"></div>
 <div id="viewer" aria-hidden="true">
   <div class="panel">
@@ -70,353 +83,533 @@
   </div>
 </div>
 
+<!-- Top-left controls -->
+<div class="ctrl">
+  <button id="toggle3D" class="btn">Passer en 3D</button>
+  <div class="range">
+    <label for="s2Opacity">Sentinel-2</label>
+    <input id="s2Opacity" type="range" min="0" max="1" step="0.01" value="1">
+    <span id="s2Val">100%</span>
+  </div>
+  <div class="range">
+    <label for="orthoOpacity">BD ORTHO</label>
+    <input id="orthoOpacity" type="range" min="0" max="1" step="0.01" value="0">
+    <span id="orthoVal">0%</span>
+  </div>
+  <div class="range">
+    <label for="hillOpacity">Hillshade</label>
+    <input id="hillOpacity" type="range" min="0" max="1" step="0.01" value="0.35">
+    <span id="hillVal">35%</span>
+  </div>
+  <div class="chk">
+    <label><input id="hqMode" type="checkbox" checked> HQ (LOD 3 / 9)</label>
+  </div>
+</div>
+
 <script>
 (function(){
   'use strict';
-  var FALLBACK_ICON = 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="16" rx="2" fill="%23eee" stroke="%23999"/><path d="M6 16l12-8M8 9h1m6 6h1" stroke="%23999" /></svg>';
-  var HUT_ICON = 'data:image/svg+xml;utf8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 12l9-7 9 7" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M5 10v9h5v-6h4v6h5v-9" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>');
 
-  var startCenter = [2.2137, 46.2276], startZoom = 5, hadHash = false;
-  var m = (location.hash || '').match(/^#([0-9.]+)\/(-?[0-9.]+)\/(-?[0-9.]+)$/);
-  if (m) { startZoom = parseFloat(m[1]); startCenter = [parseFloat(m[3]), parseFloat(m[2])]; if (isFinite(startZoom) && isFinite(startCenter[0]) && isFinite(startCenter[1])) hadHash = true; }
+  /* ======================
+     CONFIG DE BASE
+  ====================== */
+  const PMTILES_URL = "./S2_2025_Q1_31TGL.pmtiles"; // <-- adapte si besoin
 
-  var map = new maplibregl.Map({ container:'map', style:'https://tiles.openfreemap.org/styles/liberty', center:startCenter, zoom:startZoom, renderWorldCopies:false });
-  map.addControl(new maplibregl.NavigationControl(), 'top-right');
-  function updateHashLater(){ if (updateHashLater.t) cancelAnimationFrame(updateHashLater.t); updateHashLater.t = requestAnimationFrame(function(){ var z=map.getZoom().toFixed(1), c=map.getCenter(); location.replace('#'+z+'/'+c.lat.toFixed(5)+'/'+c.lng.toFixed(5)); }); }
-
-  var THUMB_ON = 14.2, THUMB_OFF = 13.8;
-  var thumbnailsOn = false;
-  var markers = new Map();
-  var clusterThumbCache = new Map();
-  var lastSyncTime = 0, SYNC_DEBOUNCE = 50;
-
-  var viewer = document.getElementById('viewer');
-  var viewerContent = document.getElementById('viewerContent');
-  var viewerTitle = document.getElementById('viewerTitle');
-  var viewerThumbs = document.getElementById('viewerThumbs');
-
-  function openViewer(props){
-    viewerTitle.textContent = props.title || 'Détail';
-    viewerContent.innerHTML = '';
-    viewerThumbs.innerHTML = '';
-
-    var photos = Array.isArray(props.photos) ? props.photos.filter(Boolean) : [];
-    console.log('openViewer called with:', photos.length, 'photos');
-
-    if (photos.length > 0) {
-      var idx = 0;
-      
-      // Image principale
-      var mainImg = document.createElement('img');
-      mainImg.referrerPolicy = 'no-referrer';
-      mainImg.alt = props.title || '';
-      mainImg.style.display = 'block';
-      
-      // Bouton lien
-      var linkBtn = document.createElement('a');
-      linkBtn.className = 'open-link';
-      linkBtn.href = props.url || '#';
-      linkBtn.target = '_blank';
-      linkBtn.rel = 'noopener';
-      linkBtn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M14 3h7v7h-2V6.41l-9.29 9.3-1.42-1.42L17.59 5H14V3z"/><path d="M5 5h6v2H7v10h10v-4h2v6H5z"/></svg>';
-      
-      // Compteur
-      var counter = document.createElement('div');
-      counter.className = 'counter';
-      
-      // Fonction pour changer d'image
-      function showPhoto(newIdx) {
-        idx = newIdx;
-        mainImg.src = photos[idx];
-        counter.textContent = (idx + 1) + '/' + photos.length;
-        
-        // Mettre à jour les miniatures actives
-        var thumbs = viewerThumbs.querySelectorAll('.thumb');
-        thumbs.forEach(function(t, i) {
-          if (i === idx) t.classList.add('active');
-          else t.classList.remove('active');
-        });
-        
-        // Scroll vers la miniature active
-        if (thumbs[idx]) {
-          thumbs[idx].scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
-        }
-      }
-      
-      // Boutons navigation (seulement si plusieurs photos)
-      if (photos.length > 1) {
-        var prevBtn = document.createElement('button');
-        prevBtn.className = 'carousel-btn prev';
-        prevBtn.textContent = '‹';
-        prevBtn.onclick = function() {
-          showPhoto((idx - 1 + photos.length) % photos.length);
-        };
-        
-        var nextBtn = document.createElement('button');
-        nextBtn.className = 'carousel-btn next';
-        nextBtn.textContent = '›';
-        nextBtn.onclick = function() {
-          showPhoto((idx + 1) % photos.length);
-        };
-        
-        viewerContent.appendChild(prevBtn);
-        viewerContent.appendChild(nextBtn);
-        viewerContent.appendChild(counter);
-        
-        // Créer les miniatures
-        photos.forEach(function(url, i) {
-          var thumb = document.createElement('img');
-          thumb.className = 'thumb';
-          if (i === 0) thumb.classList.add('active');
-          thumb.src = url;
-          thumb.referrerPolicy = 'no-referrer';
-          thumb.alt = 'Photo ' + (i + 1);
-          
-          // Clic pour mobile et desktop
-          thumb.onclick = function() {
-            showPhoto(i);
-          };
-          
-          // Hover pour desktop uniquement (si pas tactile)
-          thumb.onmouseenter = function() {
-            // Vérifier si c'est un appareil tactile
-            if (!('ontouchstart' in window)) {
-              showPhoto(i);
-            }
-          };
-          
-          viewerThumbs.appendChild(thumb);
-        });
-      }
-      
-      viewerContent.appendChild(mainImg);
-      viewerContent.appendChild(linkBtn);
-      
-      // Initialiser
-      showPhoto(0);
-      
-    } else {
-      // Pas de photos, afficher juste le poster
-      var poster = props.thumb || (props.media && (props.media.hd || props.media.large || props.media.small));
-      if (poster) {
-        var img = document.createElement('img');
-        img.referrerPolicy = 'no-referrer';
-        img.src = poster;
-        img.style.maxWidth = '100%';
-        img.style.maxHeight = '60vh';
-        img.style.borderRadius = '8px';
-        viewerContent.appendChild(img);
-      }
-    }
-
-    viewer.classList.add('open');
-    viewer.setAttribute('aria-hidden', 'false');
+  // Centre de départ (hash custom si présent)
+  let startCenter = [6.128, 45.899], startZoom = 10.5, hadHash = false;
+  const m = (location.hash || '').match(/^#([0-9.]+)\/(-?[0-9.]+)\/(-?[0-9.]+)$/);
+  if (m) {
+    startZoom = parseFloat(m[1]);
+    startCenter = [parseFloat(m[3]), parseFloat(m[2])];
+    if (isFinite(startZoom) && isFinite(startCenter[0]) && isFinite(startCenter[1])) hadHash = true;
   }
-  
-  viewer.addEventListener('click', function(e){ 
-    if (e.target === viewer) { 
-      viewer.classList.remove('open'); 
-      viewer.setAttribute('aria-hidden','true'); 
-      viewerContent.innerHTML=''; 
-      viewerThumbs.innerHTML='';
-    } 
-  });
-  window.addEventListener('keydown', function(e){ if (e.key==='Escape') viewer.click(); });
 
-  var hover = document.getElementById('hoverPreview');
-  var hoverShown = false, lastMouse = {x:0,y:0};
-  function showHover(props){ var best=(props.media&&(props.media.hd||props.media.large||props.media.small))||props.mediaUrl||props.thumb; if(!best) return hideHover(); hover.innerHTML=''; var img=document.createElement('img'); img.referrerPolicy='no-referrer'; img.src=best; hover.appendChild(img); hover.style.left=lastMouse.x+'px'; hover.style.top=lastMouse.y+'px'; hover.classList.add('open'); hoverShown=true; }
+  // UI refs
+  const s2Slider   = document.getElementById("s2Opacity");
+  const s2Label    = document.getElementById("s2Val");
+  const orthoSlider= document.getElementById("orthoOpacity");
+  const orthoLabel = document.getElementById("orthoVal");
+  const hillSlider = document.getElementById("hillOpacity");
+  const hillLabel  = document.getElementById("hillVal");
+  const hqModeChk  = document.getElementById("hqMode");
+  const toggle3Dbtn= document.getElementById("toggle3D");
+
+  // PMTiles protocol
+  const protocol = new pmtiles.Protocol();
+  maplibregl.addProtocol("pmtiles", protocol.tile);
+
+  // MapLibre map (style minimal + transition globale 1s)
+  const map = new maplibregl.Map({
+    container: 'map',
+    style: { version: 8, transition: { duration: 1000, delay: 0 }, sources: {}, layers: [] },
+    center: startCenter,
+    zoom: startZoom,
+    pitch: 0,
+    bearing: 0,
+    renderWorldCopies: false,
+    hash: false,         // on gère nous-même le hash comme dans ton code webcams
+    maxPitch: 85
+  });
+  map.addControl(new maplibregl.NavigationControl(), 'top-right');
+
+  // Utilitaires hash (comme dans Webcams)
+  function updateHashLater(){
+    if (updateHashLater.t) cancelAnimationFrame(updateHashLater.t);
+    updateHashLater.t = requestAnimationFrame(function(){
+      var z = map.getZoom().toFixed(1), c = map.getCenter();
+      location.replace('#'+z+'/'+c.lat.toFixed(5)+'/'+c.lng.toFixed(5));
+    });
+  }
+  map.on('moveend', updateHashLater);
+  map.on('zoomend', updateHashLater);
+
+  /* ======================
+     TERRAIN & HILLSHADE
+  ====================== */
+  let currentExag = 0, terrainEnabled = false, rafId = null, is3D = false;
+  const easeInOut = t => 0.5 * (1 - Math.cos(Math.PI * t));
+  function stopAnim(){ if (rafId) cancelAnimationFrame(rafId); rafId = null; }
+  function setTerrainExag(v) {
+    currentExag = v;
+    if (v <= 0) { map.setTerrain(null); terrainEnabled = false; currentExag = 0; }
+    else {
+      if (!terrainEnabled) { map.setTerrain({ source: "terrain-dem", exaggeration: v }); terrainEnabled = true; }
+      else { map.setTerrain({ source: "terrain-dem", exaggeration: v }); }
+    }
+  }
+  function animateExag(to, duration = 3000, onDone) {
+    stopAnim();
+    const from = currentExag;
+    if (to > 0 && !terrainEnabled) setTerrainExag(Math.max(from, 0.0001));
+    const start = performance.now();
+    function step(now){
+      const t = Math.min(1, (now - start) / duration);
+      const v = from + (to - from) * easeInOut(t);
+      setTerrainExag(v);
+      if (t < 1) { rafId = requestAnimationFrame(step); }
+      else { if (to <= 0) setTerrainExag(0); rafId = null; if (onDone) onDone(); }
+    }
+    rafId = requestAnimationFrame(step);
+  }
+  function go3D(){ map.easeTo({ bearing:0, pitch:45, duration:1500 }); map.once("moveend", () => animateExag(1, 3000)); }
+  function go2D(){ animateExag(0, 1200, () => { map.easeTo({ bearing:0, pitch:0, duration:800 }); }); }
+  toggle3Dbtn.addEventListener("click", () => {
+    stopAnim();
+    if (!is3D) { go3D(); toggle3Dbtn.textContent = "Revenir en 2D"; }
+    else       { go2D(); toggle3Dbtn.textContent = "Passer en 3D"; }
+    is3D = !is3D;
+  });
+
+  /* ======================
+     OPACITÉS
+  ====================== */
+  function updateS2Opacity(){
+    const v = parseFloat(s2Slider.value);
+    s2Label.textContent = Math.round(v*100) + "%";
+    if (map.getLayer("s2")) map.setPaintProperty("s2", "raster-opacity", v);
+  }
+  function updateOrthoOpacity(){
+    const v = parseFloat(orthoSlider.value);
+    orthoLabel.textContent = Math.round(v*100) + "%";
+    if (map.getLayer("bdortho")) map.setPaintProperty("bdortho", "raster-opacity", v);
+  }
+  function updateHillOpacity(){
+    const v = parseFloat(hillSlider.value);
+    hillLabel.textContent = Math.round(v*100) + "%";
+    if (map.getLayer("hillshade")) {
+      map.setPaintProperty("hillshade", "hillshade-shadow-color",   `rgba(0,0,0,${v})`);
+      map.setPaintProperty("hillshade", "hillshade-highlight-color",`rgba(255,255,255,${v})`);
+      map.setPaintProperty("hillshade", "hillshade-accent-color",   `rgba(136,136,136,${v})`);
+    }
+  }
+  s2Slider.addEventListener("input", updateS2Opacity);
+  orthoSlider.addEventListener("input", updateOrthoOpacity);
+  hillSlider.addEventListener("input", updateHillOpacity);
+
+  /* ======================
+     HQ MODE (LOD 3/9)
+  ====================== */
+  function applyHQMode(){
+    const L = hqModeChk.checked ? 3 : 4;  // valeurs standard de repli : 4 / 3
+    const R = hqModeChk.checked ? 9 : 3;
+    ["s2_pmtiles","bdortho","terrain-dem","hillshade-dem"].forEach(id => {
+      if (map.getSource(id)) {
+        try { map.setSourceTileLodParams(L, R, id); } catch(e){}
+      }
+    });
+  }
+  hqModeChk.addEventListener("change", applyHQMode);
+
+  /* ======================
+     PMTiles (with fallback)
+  ====================== */
+  async function addPMTilesSource() {
+    let p = new pmtiles.PMTiles(PMTILES_URL);
+    try {
+      await p.getHeader();
+      protocol.add(p);
+      map.addSource("s2_pmtiles", { type: "raster", url: "pmtiles://" + PMTILES_URL, tileSize: 512,
+        attribution: "Contains modified Copernicus Sentinel data © ESA" });
+    } catch (err) {
+      const resp = await fetch(PMTILES_URL);
+      const ab = await resp.arrayBuffer();
+      const KEY = "local-s2.pmtiles";
+      const file = new File([ab], KEY);
+      const source = new pmtiles.FileSource(file);
+      p = new pmtiles.PMTiles(source);
+      protocol.add(p);
+      map.addSource("s2_pmtiles", { type: "raster", url: "pmtiles://" + KEY, tileSize: 512,
+        attribution: "Contains modified Copernicus Sentinel data © ESA" });
+    }
+  }
+
+  /* ======================
+     DOM overlay (Webcams & Refuges)
+  ====================== */
+  const FALLBACK_ICON = 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="16" rx="2" fill="%23eee" stroke="%23999"/><path d="M6 16l12-8M8 9h1m6 6h1" stroke="%23999" /></svg>';
+  const HUT_ICON = 'data:image/svg+xml;utf8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 12l9-7 9 7" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M5 10v9h5v-6h4v6h5v-9" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>');
+  const hover = document.getElementById('hoverPreview');
+  let hoverShown = false, lastMouse = {x:0,y:0};
+
+  function showHover(props){
+    const best=(props.media&&(props.media.hd||props.media.large||props.media.small))||props.mediaUrl||props.thumb;
+    if(!best) return hideHover();
+    hover.innerHTML=''; const img=document.createElement('img'); img.referrerPolicy='no-referrer'; img.src=best; hover.appendChild(img);
+    hover.style.left=lastMouse.x+'px'; hover.style.top=lastMouse.y+'px'; hover.classList.add('open'); hoverShown=true;
+  }
   function hideHover(){ if(!hoverShown) return; hover.classList.remove('open'); hoverShown=false; }
-  window.addEventListener('mousemove', function(e){ lastMouse.x=e.clientX; lastMouse.y=e.clientY; if(hoverShown){ hover.style.left=e.clientX+'px'; hover.style.top=e.clientY+'px'; } });
+  window.addEventListener('mousemove', e => { lastMouse.x=e.clientX; lastMouse.y=e.clientY; if(hoverShown){ hover.style.left=e.clientX+'px'; hover.style.top=e.clientY+'px'; } });
   map.on('dragstart', hideHover); map.on('zoomstart', hideHover); map.on('movestart', hideHover);
 
-  function preloadOk(url){ return new Promise(function(resolve){ if(!url) return resolve(false); var t=new Image(); t.referrerPolicy='no-referrer'; t.onload=function(){resolve(true)}; t.onerror=function(){resolve(false)}; t.src=url; }); }
-
-  function makeFovDiv(bearingDeg, fovDeg){ var d=document.createElement('div'); d.className='cam-fov'; var span=Math.max(0,Math.min(360,(fovDeg||0))); d.style.backgroundImage='conic-gradient(rgba(0,0,0,0.35) 0deg '+span+'deg, transparent '+span+'deg 360deg)'; d.style.transform='rotate('+(bearingDeg - span/2)+'deg)'; return d; }
+  function preloadOk(url){ return new Promise(res=>{ if(!url) return res(false); const t=new Image(); t.referrerPolicy='no-referrer'; t.onload=()=>res(true); t.onerror=()=>res(false); t.src=url; }); }
+  function makeFovDiv(bearingDeg, fovDeg){ const d=document.createElement('div'); d.className='cam-fov'; const span=Math.max(0,Math.min(360,(fovDeg||0))); d.style.backgroundImage='conic-gradient(rgba(0,0,0,0.35) 0deg '+span+'deg, transparent '+span+'deg 360deg)'; d.style.transform='rotate('+(bearingDeg - span/2)+'deg)'; return d; }
 
   function createCamMarker(f){
-    var wrap=document.createElement('div'); wrap.className='cam-wrap'; var fovEl=makeFovDiv(Number(f.properties.bearing||0), Number(f.properties.fov||90)); wrap.appendChild(fovEl);
-    var el=document.createElement('div'); el.className='cam-marker'; var src=f.properties.thumb || FALLBACK_ICON; var img=document.createElement('img'); img.src=src; img.alt=f.properties.title||'Webcam'; img.loading='lazy'; img.referrerPolicy='no-referrer'; img.onerror=function(){ img.onerror=null; img.src=FALLBACK_ICON; }; el.appendChild(img); wrap.appendChild(el);
-    wrap.addEventListener('mouseenter', function(e){ lastMouse.x=e.clientX; lastMouse.y=e.clientY; showHover({ media:{}, mediaUrl:f.properties.thumb, thumb:f.properties.thumb }); });
-    wrap.addEventListener('mousemove', function(e){ lastMouse.x=e.clientX; lastMouse.y=e.clientY; if(hoverShown){ hover.style.left=e.clientX+'px'; hover.style.top=e.clientY+'px'; } });
+    const wrap=document.createElement('div'); wrap.className='cam-wrap'; const fovEl=makeFovDiv(Number(f.properties.bearing||0), Number(f.properties.fov||90)); wrap.appendChild(fovEl);
+    const el=document.createElement('div'); el.className='cam-marker'; const src=f.properties.thumb || FALLBACK_ICON; const img=document.createElement('img'); img.src=src; img.alt=f.properties.title||'Webcam'; img.loading='lazy'; img.referrerPolicy='no-referrer'; img.onerror=function(){ img.onerror=null; img.src=FALLBACK_ICON; }; el.appendChild(img); wrap.appendChild(el);
+    wrap.addEventListener('mouseenter', e=>{ lastMouse.x=e.clientX; lastMouse.y=e.clientY; showHover({ media:{}, mediaUrl:f.properties.thumb, thumb:f.properties.thumb }); });
+    wrap.addEventListener('mousemove', e=>{ lastMouse.x=e.clientX; lastMouse.y=e.clientY; if(hoverShown){ hover.style.left=e.clientX+'px'; hover.style.top=e.clientY+'px'; } });
     wrap.addEventListener('mouseleave', hideHover);
-    wrap.addEventListener('click', function(){ openViewer({ title:f.properties.title, url:f.properties.url, thumb:f.properties.thumb }); map.easeTo({ center:f.geometry.coordinates, zoom:Math.max(map.getZoom(),12), duration:500 }); });
+    wrap.addEventListener('click', function(){
+      openViewer({ title:f.properties.title, url:f.properties.url, thumb:f.properties.thumb });
+      map.easeTo({ center:f.geometry.coordinates, zoom:Math.max(map.getZoom(),12), duration:500 });
+    });
     return new maplibregl.Marker({ element:wrap, anchor:'bottom' }).setLngLat(f.geometry.coordinates);
   }
 
   function createRefugeMarker(f){
-    var p = f.properties || {};
-    var thumb = p.thumbnail || (Array.isArray(p.photos) && p.photos[0]) || null;
-    var el = document.createElement('div');
+    const p = f.properties || {};
+    const thumb = p.thumbnail || (Array.isArray(p.photos) && p.photos[0]) || null;
+    const el = document.createElement('div');
     el.className='hut-marker';
-    if (thumb) {
-      try { el.style.backgroundImage = 'url('+CSS.escape(thumb)+')'; }
-      catch(e){ el.style.backgroundImage = 'url('+String(thumb).replace(/["']/g,'')+')'; }
-      el.style.backgroundSize = 'cover';
-      el.style.backgroundPosition = 'center';
-    } else {
-      var img=document.createElement('img'); img.src=HUT_ICON; img.alt='Refuge'; el.appendChild(img);
-    }
-    var status=(p.etat && (p.etat.valeur||'')).toLowerCase();
+    if (thumb) { try { el.style.backgroundImage = 'url('+CSS.escape(thumb)+')'; } catch(e){ el.style.backgroundImage = 'url('+String(thumb).replace(/["']/g,'')+')'; } }
+    else { const img=document.createElement('img'); img.src=HUT_ICON; img.alt='Refuge'; el.appendChild(img); }
+    const status=(p.etat && (p.etat.valeur||'')).toLowerCase();
     if(status && (status.includes('ferm') || status.includes('détru') || status.includes('detru'))) el.classList.add('is-closed');
-    var places = (p.places && (p.places.valeur!=null)) ? String(p.places.valeur) : '';
-    if(places){ var b=document.createElement('div'); b.className='hut-badge'; b.textContent=places; el.appendChild(b); }
-    
-    // Ajout du hover pour les refuges
-    el.addEventListener('mouseenter', function(e){ 
-      lastMouse.x=e.clientX; 
-      lastMouse.y=e.clientY; 
-      if(thumb) showHover({ media:{}, mediaUrl:thumb, thumb:thumb }); 
-    });
-    el.addEventListener('mousemove', function(e){ 
-      lastMouse.x=e.clientX; 
-      lastMouse.y=e.clientY; 
-      if(hoverShown){ 
-        hover.style.left=e.clientX+'px'; 
-        hover.style.top=e.clientY+'px'; 
-      } 
-    });
+    const places = (p.places && (p.places.valeur!=null)) ? String(p.places.valeur) : '';
+    if(places){ const b=document.createElement('div'); b.className='hut-badge'; b.textContent=places; el.appendChild(b); }
+
+    el.addEventListener('mouseenter', e=>{ lastMouse.x=e.clientX; lastMouse.y=e.clientY; if(thumb) showHover({ media:{}, mediaUrl:thumb, thumb:thumb }); });
+    el.addEventListener('mousemove', e=>{ lastMouse.x=e.clientX; lastMouse.y=e.clientY; if(hoverShown){ hover.style.left=e.clientX+'px'; hover.style.top=e.clientY+'px'; } });
     el.addEventListener('mouseleave', hideHover);
-    
+
     el.addEventListener('click', function(){
-      // S'assurer que photos est un tableau
-      var photos = p.photos;
-      if (typeof photos === 'string') {
-        try { photos = JSON.parse(photos); } catch(e) { photos = []; }
-      }
+      let photos = p.photos;
+      if (typeof photos === 'string') { try { photos = JSON.parse(photos); } catch(e) { photos = []; } }
       if (!Array.isArray(photos)) photos = [];
-      
-      console.log('Opening refuge:', p.nom, 'Photos:', photos.length);
-      openViewer({ 
-        title: p.nom || 'Refuge', 
-        url: p.lien || '', 
-        thumb: thumb, 
-        photos: photos 
-      });
+      openViewer({ title: p.nom || 'Refuge', url: p.lien || '', thumb: thumb, photos: photos });
       map.easeTo({ center:f.geometry.coordinates, zoom:Math.max(map.getZoom(),12), duration:500 });
     });
     return new maplibregl.Marker({ element:el, anchor:'bottom' }).setLngLat(f.geometry.coordinates);
   }
 
-  function createClusterMarkerWebcams(f){
-    var cid=f.properties.cluster_id; var el=document.createElement('div'); el.className='cluster-wrap'; var icon=document.createElement('div'); icon.className='cluster-marker';
-    var cacheKey='webcams:'+cid; var cached=clusterThumbCache.get(cacheKey);
-    if(cached){ var im=document.createElement('img'); im.src=cached; im.loading='lazy'; im.referrerPolicy='no-referrer'; icon.appendChild(im); }
-    else {
-      map.getSource('webcams').getClusterLeaves(cid, 8, 0).then(function(leaves){
-        function pickNext(idx){ if(idx>=leaves.length){ var imF=document.createElement('img'); imF.src=FALLBACK_ICON; icon.appendChild(imF); clusterThumbCache.set(cacheKey, FALLBACK_ICON); return; }
-          var leaf=leaves[idx]; var u=leaf && leaf.properties && leaf.properties.thumb; preloadOk(u).then(function(ok){ if(ok){ clusterThumbCache.set(cacheKey,u); var im2=document.createElement('img'); im2.src=u; im2.loading='lazy'; im2.referrerPolicy='no-referrer'; icon.appendChild(im2); } else { pickNext(idx+1); } });
-        }
-        pickNext(0);
-      }).catch(function(){ var im3=document.createElement('img'); im3.src=FALLBACK_ICON; icon.appendChild(im3); clusterThumbCache.set(cacheKey, FALLBACK_ICON); });
-    }
-    var badge=document.createElement('div'); badge.className='cluster-count'; badge.textContent=String(f.properties.point_count);
-    el.appendChild(icon); el.appendChild(badge);
-    el.addEventListener('click', function(){ map.getSource('webcams').getClusterExpansionZoom(cid).then(function(z){ map.easeTo({ center:f.geometry.coordinates, zoom:z, duration:500 }); }); });
-    return new maplibregl.Marker({ element:el, anchor:'bottom' }).setLngLat(f.geometry.coordinates);
-  }
+  const viewer = document.getElementById('viewer');
+  const viewerContent = document.getElementById('viewerContent');
+  const viewerTitle = document.getElementById('viewerTitle');
+  const viewerThumbs = document.getElementById('viewerThumbs');
 
-  function createClusterMarkerRefuges(f){
-    var cid=f.properties.cluster_id; var el=document.createElement('div'); el.className='cluster-wrap'; var icon=document.createElement('div'); icon.className='cluster-marker';
-    var im=document.createElement('img'); im.src=HUT_ICON; icon.appendChild(im);
-    var badge=document.createElement('div'); badge.className='cluster-count'; badge.textContent=String(f.properties.point_count);
-    el.appendChild(icon); el.appendChild(badge);
-    el.addEventListener('click', function(){ map.getSource('refuges').getClusterExpansionZoom(cid).then(function(z){ map.easeTo({ center:f.geometry.coordinates, zoom:z, duration:500 }); }); });
-    return new maplibregl.Marker({ element:el, anchor:'bottom' }).setLngLat(f.geometry.coordinates);
+  function openViewer(props){
+    viewerTitle.textContent = props.title || 'Détail';
+    viewerContent.innerHTML = '';
+    viewerThumbs.innerHTML = '';
+    const photos = Array.isArray(props.photos) ? props.photos.filter(Boolean) : [];
+    if (photos.length > 0) {
+      let idx = 0;
+      const mainImg = document.createElement('img');
+      mainImg.referrerPolicy = 'no-referrer';
+      mainImg.alt = props.title || '';
+      const linkBtn = document.createElement('a');
+      linkBtn.className = 'open-link';
+      linkBtn.href = props.url || '#';
+      linkBtn.target = '_blank'; linkBtn.rel = 'noopener';
+      linkBtn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M14 3h7v7h-2V6.41l-9.29 9.3-1.42-1.42L17.59 5H14V3z"/><path d="M5 5h6v2H7v10h10v-4h2v6H5z"/></svg>';
+      const counter = document.createElement('div'); counter.className = 'counter';
+      function showPhoto(newIdx){ idx=newIdx; mainImg.src=photos[idx]; counter.textContent=(idx+1)+'/'+photos.length;
+        const thumbs = viewerThumbs.querySelectorAll('.thumb');
+        thumbs.forEach((t,i)=>{ t.classList.toggle('active', i===idx); });
+        if (thumbs[idx]) thumbs[idx].scrollIntoView({ behavior:'smooth', block:'nearest', inline:'center' });
+      }
+      if (photos.length > 1) {
+        const prevBtn = document.createElement('button'); prevBtn.className='carousel-btn prev'; prevBtn.textContent='‹'; prevBtn.onclick=()=>showPhoto((idx - 1 + photos.length) % photos.length);
+        const nextBtn = document.createElement('button'); nextBtn.className='carousel-btn next'; nextBtn.textContent='›'; nextBtn.onclick=()=>showPhoto((idx + 1) % photos.length);
+        viewerContent.appendChild(prevBtn); viewerContent.appendChild(nextBtn); viewerContent.appendChild(counter);
+        photos.forEach((url,i)=>{ const th=document.createElement('img'); th.className='thumb'+(i===0?' active':''); th.src=url; th.referrerPolicy='no-referrer'; th.alt='Photo '+(i+1); th.onclick=()=>showPhoto(i); th.onmouseenter=()=>{ if (!('ontouchstart' in window)) showPhoto(i); }; viewerThumbs.appendChild(th); });
+      }
+      viewerContent.appendChild(mainImg); viewerContent.appendChild(linkBtn); showPhoto(0);
+    } else {
+      const poster = props.thumb;
+      if (poster) { const img=document.createElement('img'); img.referrerPolicy='no-referrer'; img.src=poster; img.style.maxWidth='100%'; img.style.maxHeight='60vh'; img.style.borderRadius='8px'; viewerContent.appendChild(img); }
+    }
+    viewer.classList.add('open'); viewer.setAttribute('aria-hidden','false');
   }
+  viewer.addEventListener('click', e => { if (e.target === viewer) { viewer.classList.remove('open'); viewer.setAttribute('aria-hidden','true'); viewerContent.innerHTML=''; viewerThumbs.innerHTML=''; } });
+  window.addEventListener('keydown', e => { if (e.key==='Escape') viewer.click(); });
+
+  let markers = new Map();
+  let clusterThumbCache = new Map();
+  let lastSyncTime = 0, SYNC_DEBOUNCE = 50;
+  const THUMB_ON = 14.2, THUMB_OFF = 13.8;
+  let thumbnailsOn = false;
 
   function syncDomMarkers(){
-    var now=Date.now(); if(now-lastSyncTime < SYNC_DEBOUNCE && !syncDomMarkers.force) return; lastSyncTime=now; syncDomMarkers.force=false;
-    var z=map.getZoom(); var wantThumbs = z > (thumbnailsOn ? THUMB_OFF : THUMB_ON);
-    if(wantThumbs !== thumbnailsOn){ thumbnailsOn = wantThumbs; markers.forEach(function(m){ m.remove(); }); markers.clear(); hover.classList.remove('open'); syncDomMarkers.force=true; return; }
+    const now=Date.now(); if(now-lastSyncTime < SYNC_DEBOUNCE && !syncDomMarkers.force) return; lastSyncTime=now; syncDomMarkers.force=false;
+    const z=map.getZoom(); const wantThumbs = z > (thumbnailsOn ? THUMB_OFF : THUMB_ON);
+    if(wantThumbs !== thumbnailsOn){ thumbnailsOn = wantThumbs; markers.forEach(m=>m.remove()); markers.clear(); hover.classList.remove('open'); syncDomMarkers.force=true; return; }
 
-    var next=new Set(); var canvas=map.getCanvas(); var bbox=[[0,0],[canvas.width,canvas.height]];
-    var clustersML = map.queryRenderedFeatures(bbox, { layers:['ml-clusters'] }) || [];
-    var pointsML   = map.queryRenderedFeatures(bbox, { layers:['ml-unclustered'] }) || [];
-    var clustersRF = map.queryRenderedFeatures(bbox, { layers:['rf-clusters'] }) || [];
-    var pointsRF   = map.queryRenderedFeatures(bbox, { layers:['rf-unclustered'] }) || [];
+    const next=new Set(); const canvas=map.getCanvas(); const bbox=[[0,0],[canvas.width,canvas.height]];
+    const clustersML = map.queryRenderedFeatures(bbox, { layers:['ml-clusters'] }) || [];
+    const pointsML   = map.queryRenderedFeatures(bbox, { layers:['ml-unclustered'] }) || [];
+    const clustersRF = map.queryRenderedFeatures(bbox, { layers:['rf-clusters'] }) || [];
+    const pointsRF   = map.queryRenderedFeatures(bbox, { layers:['rf-unclustered'] }) || [];
 
-    var totalClusters = clustersML.length + clustersRF.length;
-    var totalPoints   = pointsML.length + pointsRF.length;
-    var mode = thumbnailsOn ? 'points' : 'clusters';
+    let mode = thumbnailsOn ? 'points' : 'clusters';
+    const totalClusters = clustersML.length + clustersRF.length;
+    const totalPoints   = pointsML.length + pointsRF.length;
     if(mode==='points'   && totalPoints===0 && totalClusters>0) mode='clusters';
     if(mode==='clusters' && totalClusters===0 && totalPoints>0) mode='points';
 
     if(mode==='clusters'){
-      var seenCw=new Set();
-      for(var i=0;i<clustersML.length;i++){ var fc=clustersML[i]; if(!fc.properties||!('cluster_id' in fc.properties)) continue; var key='c-web-'+fc.properties.cluster_id; if(seenCw.has(key)) continue; seenCw.add(key); next.add(key);
+      const seenCw=new Set();
+      for (let i=0;i<clustersML.length;i++){
+        const fc=clustersML[i]; if(!fc.properties||!('cluster_id' in fc.properties)) continue;
+        const key='c-web-'+fc.properties.cluster_id; if(seenCw.has(key)) continue; seenCw.add(key); next.add(key);
         if(!markers.has(key)) { markers.set(key, createClusterMarkerWebcams(fc).addTo(map)); }
-        else { var mk=markers.get(key), cur=mk.getLngLat(), nc=fc.geometry.coordinates; var d=Math.hypot(cur.lng-nc[0], cur.lat-nc[1]); if(d>0.0001) mk.setLngLat(nc); }
+        else { const mk=markers.get(key), cur=mk.getLngLat(), nc=fc.geometry.coordinates; if(Math.hypot(cur.lng-nc[0], cur.lat-nc[1])>0.0001) mk.setLngLat(nc); }
       }
-      var seenCr=new Set();
-      for(var j=0;j<clustersRF.length;j++){ var fr=clustersRF[j]; if(!fr.properties||!('cluster_id' in fr.properties)) continue; var keyR='c-ref-'+fr.properties.cluster_id; if(seenCr.has(keyR)) continue; seenCr.add(keyR); next.add(keyR);
+      const seenCr=new Set();
+      for (let j=0;j<clustersRF.length;j++){
+        const fr=clustersRF[j]; if(!fr.properties||!('cluster_id' in fr.properties)) continue;
+        const keyR='c-ref-'+fr.properties.cluster_id; if(seenCr.has(keyR)) continue; seenCr.add(keyR); next.add(keyR);
         if(!markers.has(keyR)) { markers.set(keyR, createClusterMarkerRefuges(fr).addTo(map)); }
-        else { var mkR=markers.get(keyR), curR=mkR.getLngLat(), ncR=fr.geometry.coordinates; var dR=Math.hypot(curR.lng-ncR[0], curR.lat-ncR[1]); if(dR>0.0001) mkR.setLngLat(ncR); }
+        else { const mkR=markers.get(keyR), curR=mkR.getLngLat(), ncR=fr.geometry.coordinates; if(Math.hypot(curR.lng-ncR[0], curR.lat-ncR[1])>0.0001) mkR.setLngLat(ncR); }
       }
     } else {
-      var seenPw=new Set();
-      for(var k=0;k<pointsML.length;k++){ var pf=pointsML[k]; var id=(pf.properties && (pf.properties.id || JSON.stringify(pf.geometry.coordinates))) || ('idx'+k); var keyP='p-web-'+id; if(seenPw.has(keyP)) continue; seenPw.add(keyP); next.add(keyP);
+      const seenPw=new Set();
+      for (let k=0;k<pointsML.length;k++){
+        const pf=pointsML[k]; const id=(pf.properties && (pf.properties.id || JSON.stringify(pf.geometry.coordinates))) || ('idx'+k);
+        const keyP='p-web-'+id; if(seenPw.has(keyP)) continue; seenPw.add(keyP); next.add(keyP);
         if(!markers.has(keyP)) { markers.set(keyP, createCamMarker(pf).addTo(map)); }
-        else { var mkP=markers.get(keyP), curP=mkP.getLngLat(), ncP=pf.geometry.coordinates; var dP=Math.hypot(curP.lng-ncP[0], curP.lat-ncP[1]); if(dP>0.0001) mkP.setLngLat(ncP); }
+        else { const mkP=markers.get(keyP), curP=mkP.getLngLat(), ncP=pf.geometry.coordinates; if(Math.hypot(curP.lng-ncP[0], curP.lat-ncP[1])>0.0001) mkP.setLngLat(ncP); }
       }
-      var seenPr=new Set();
-      for(var t=0;t<pointsRF.length;t++){ var pr=pointsRF[t]; var idr=(pr.properties && (pr.properties.id || JSON.stringify(pr.geometry.coordinates))) || ('idxR'+t); var keyR2='p-ref-'+idr; if(seenPr.has(keyR2)) continue; seenPr.add(keyR2); next.add(keyR2);
+      const seenPr=new Set();
+      for (let t=0;t<pointsRF.length;t++){
+        const pr=pointsRF[t]; const idr=(pr.properties && (pr.properties.id || JSON.stringify(pr.geometry.coordinates))) || ('idxR'+t);
+        const keyR2='p-ref-'+idr; if(seenPr.has(keyR2)) continue; seenPr.add(keyR2); next.add(keyR2);
         if(!markers.has(keyR2)) { markers.set(keyR2, createRefugeMarker(pr).addTo(map)); }
-        else { var mkR2=markers.get(keyR2), curR2=mkR2.getLngLat(), ncR2=pr.geometry.coordinates; var dR2=Math.hypot(curR2.lng-ncR2[0], curR2.lat-ncR2[1]); if(dR2>0.0001) mkR2.setLngLat(ncR2); }
+        else { const mkR2=markers.get(keyR2), curR2=mkR2.getLngLat(), ncR2=pr.geometry.coordinates; if(Math.hypot(curR2.lng-ncR2[0], curR2.lat-ncR2[1])>0.0001) mkR2.setLngLat(ncR2); }
       }
     }
-
-    markers.forEach(function(m,key){ if(!next.has(key)){ m.remove(); markers.delete(key); } });
+    markers.forEach((m,key)=>{ if(!next.has(key)){ m.remove(); markers.delete(key); } });
   }
 
   function initDomOverlays(){
-    var pending=false, syncTimeout=null;
-    function requestSync(immediate){ if(syncTimeout) clearTimeout(syncTimeout); if(immediate){ syncDomMarkers.force=true; syncDomMarkers(); return; } if(pending) return; pending=true; syncTimeout=setTimeout(function(){ requestAnimationFrame(function(){ pending=false; syncDomMarkers(); }); }, SYNC_DEBOUNCE); }
+    let pending=false, syncTimeout=null;
+    function requestSync(immediate){
+      if(syncTimeout) clearTimeout(syncTimeout);
+      if(immediate){ syncDomMarkers.force=true; syncDomMarkers(); return; }
+      if(pending) return; pending=true;
+      syncTimeout=setTimeout(()=>{ requestAnimationFrame(()=>{ pending=false; syncDomMarkers(); }); }, 50);
+    }
     syncDomMarkers.force=true; syncDomMarkers();
-    map.on('move', function(){ requestSync(false); });
-    map.on('zoom', function(){ requestSync(false); });
-    map.on('idle', function(){ requestSync(true); });
-    map.on('sourcedata', function(e){ if(e && (e.sourceId==='webcams' || e.sourceId==='refuges') && e.isSourceLoaded){ requestSync(true); } });
+    map.on('move', ()=>requestSync(false));
+    map.on('zoom', ()=>requestSync(false));
+    map.on('idle', ()=>requestSync(true));
+    map.on('sourcedata', e=>{ if(e && (e.sourceId==='webcams' || e.sourceId==='refuges') && e.isSourceLoaded){ requestSync(true); } });
   }
 
-  map.on('load', function(){
-    fetch('skaping_webcam.json').then(r=>r.json()).then(function(data){
-      var features = (function normalizeToFeatures(json){
+  function createClusterMarkerWebcams(f){
+    const cid=f.properties.cluster_id; const el=document.createElement('div'); el.className='cluster-wrap';
+    const icon=document.createElement('div'); icon.className='cluster-marker';
+    const cacheKey='webcams:'+cid; const cached=clusterThumbCache.get(cacheKey);
+    if(cached){ const im=document.createElement('img'); im.src=cached; im.loading='lazy'; im.referrerPolicy='no-referrer'; icon.appendChild(im); }
+    else {
+      map.getSource('webcams').getClusterLeaves(cid, 8, 0).then(leaves=>{
+        (function pickNext(idx){
+          if(idx>=leaves.length){ const imF=document.createElement('img'); imF.src=FALLBACK_ICON; icon.appendChild(imF); clusterThumbCache.set(cacheKey, FALLBACK_ICON); return; }
+          const leaf=leaves[idx]; const u=leaf && leaf.properties && leaf.properties.thumb;
+          preloadOk(u).then(ok=>{
+            if(ok){ clusterThumbCache.set(cacheKey,u); const im2=document.createElement('img'); im2.src=u; im2.loading='lazy'; im2.referrerPolicy='no-referrer'; icon.appendChild(im2); }
+            else { pickNext(idx+1); }
+          });
+        })(0);
+      }).catch(()=>{
+        const im3=document.createElement('img'); im3.src=FALLBACK_ICON; icon.appendChild(im3); clusterThumbCache.set(cacheKey, FALLBACK_ICON);
+      });
+    }
+    const badge=document.createElement('div'); badge.className='cluster-count'; badge.textContent=String(f.properties.point_count);
+    el.appendChild(icon); el.appendChild(badge);
+    el.addEventListener('click', ()=>{ map.getSource('webcams').getClusterExpansionZoom(cid).then(z=>{ map.easeTo({ center:f.geometry.coordinates, zoom:z, duration:500 }); }); });
+    return new maplibregl.Marker({ element:el, anchor:'bottom' }).setLngLat(f.geometry.coordinates);
+  }
+  function createClusterMarkerRefuges(f){
+    const cid=f.properties.cluster_id; const el=document.createElement('div'); el.className='cluster-wrap';
+    const icon=document.createElement('div'); icon.className='cluster-marker'; const im=document.createElement('img'); im.src=HUT_ICON; icon.appendChild(im);
+    const badge=document.createElement('div'); badge.className='cluster-count'; badge.textContent=String(f.properties.point_count);
+    el.appendChild(icon); el.appendChild(badge);
+    el.addEventListener('click', ()=>{ map.getSource('refuges').getClusterExpansionZoom(cid).then(z=>{ map.easeTo({ center:f.geometry.coordinates, zoom:z, duration:500 }); }); });
+    return new maplibregl.Marker({ element:el, anchor:'bottom' }).setLngLat(f.geometry.coordinates);
+  }
+
+  /* ======================
+     LOAD EVERYTHING
+  ====================== */
+  map.on('load', async ()=>{
+
+    // 0) Background blanc
+    map.addLayer({ id:'bg', type:'background', paint:{ "background-color": "#ffffff" } });
+
+    // 1) DEM terrain & hillshade (séparés)
+    map.addSource("terrain-dem", {
+      type: "raster-dem",
+      tiles: ["https://tiles.mapterhorn.com/{z}/{x}/{y}.webp"],
+      encoding: "terrarium",
+      tileSize: 512,
+      attribution: '<a href="https://mapterhorn.com/attribution">© Mapterhorn</a>'
+    });
+    setTerrainExag(0);
+
+    map.addSource("hillshade-dem", {
+      type: "raster-dem",
+      tiles: ["https://tiles.mapterhorn.com/{z}/{x}/{y}.webp"],
+      encoding: "terrarium",
+      tileSize: 512,
+      attribution: '<a href="https://mapterhorn.com/attribution">© Mapterhorn</a>'
+    });
+
+    map.addLayer({
+      id: "hillshade",
+      type: "hillshade",
+      source: "hillshade-dem",
+      paint: {
+        "hillshade-exaggeration": 0.5,
+        "hillshade-shadow-color":   "rgba(0,0,0,0.35)",
+        "hillshade-highlight-color":"rgba(255,255,255,0.35)",
+        "hillshade-accent-color":   "rgba(136,136,136,0.35)",
+        "hillshade-illumination-anchor": "map",
+        "hillshade-exaggeration-transition": { "duration": 1000, "delay": 0 },
+        "hillshade-shadow-color-transition": { "duration": 1000, "delay": 0 },
+        "hillshade-highlight-color-transition": { "duration": 1000, "delay": 0 },
+        "hillshade-accent-color-transition": { "duration": 1000, "delay": 0 }
+      }
+    });
+
+    // 2) PMTiles imagery
+    await addPMTilesSource();
+    map.addLayer(
+      { id: "s2", type: "raster", source: "s2_pmtiles",
+        paint: {
+          "raster-opacity": parseFloat(s2Slider.value),
+          "raster-resampling": "nearest",
+          "raster-fade-duration": 1000,
+          "raster-opacity-transition": { "duration": 1000 }
+        }
+      },
+      "hillshade"
+    );
+
+    // 3) BD ORTHO WMTS
+    map.addSource("bdortho", {
+      type: "raster",
+      tiles: [
+        "https://data.geopf.fr/wmts?SERVICE=WMTS&VERSION=1.0.0&REQUEST=GetTile&LAYER=ORTHOIMAGERY.ORTHOPHOTOS.BDORTHO&STYLE=normal&FORMAT=image/jpeg&TILEMATRIXSET=PM&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}"
+      ],
+      tileSize: 256,
+      attribution: '<a href="https://www.ign.fr">© IGN – BD ORTHO</a>'
+    });
+    map.addLayer(
+      { id: "bdortho", type: "raster", source: "bdortho",
+        paint: {
+          "raster-opacity": parseFloat(orthoSlider.value),
+          "raster-resampling": "nearest",
+          "raster-fade-duration": 1000,
+          "raster-opacity-transition": { "duration": 1000 }
+        }
+      },
+      "hillshade"
+    );
+
+    // 4) HQ par défaut (3 / 9) sur S2/ORTHO/DEM/HILLSHADE
+    applyHQMode();
+
+    // 5) Opacités initiales
+    updateS2Opacity(); updateOrthoOpacity(); updateHillOpacity();
+
+    // 6) SOURCES WEBCAMS + REFUGES
+    fetch('skaping_webcam.json').then(r=>r.json()).then(data=>{
+      const features = (function normalizeToFeatures(json){
         if(json && json.type==='FeatureCollection' && Array.isArray(json.features)){
-          return json.features.filter(function(f){ return f && f.geometry && f.geometry.type==='Point'; }); }
-        var out=[]; if(Array.isArray(json)){ for(var i=0;i<json.length;i++){ var item=json[i]; var lon=parseFloat(item.longitude!=null?item.longitude:item.lon); var lat=parseFloat(item.latitude!=null?item.latitude:item.lat); if(!isFinite(lon)||!isFinite(lat)) continue; var povs=Array.isArray(item.point_of_views)?item.point_of_views:[]; var pov=null; for(var k=0;k<povs.length;k++){ if(povs[k] && povs[k].type==='image'){ pov=povs[k]; break; } } if(!pov && povs.length) pov=pov||{}; var title=(pov && (pov.title)) || item.label || 'Webcam'; var url=(pov && pov.url) || '#'; var thumb=(pov && ((pov.type==='video'&&pov.preview&&pov.preview.thumb)?pov.preview.thumb:(pov.latest_media&&pov.latest_media.thumb&&!/\.mp4$/i.test(pov.latest_media.thumb))?pov.latest_media.thumb:(pov.preview&&pov.preview.thumb)?pov.preview.thumb:'')) || '';
-          var bearing=parseFloat((pov&&pov.bearing)!=null?pov.bearing:(pov&&pov.direction)!=null?pov.direction:(pov&&pov.heading)!=null?pov.heading:(pov&&pov.azimuth)!=null?pov.azimuth:(item.bearing!=null?item.bearing:item.direction)); if(!isFinite(bearing)) bearing=0;
-          var fov=parseFloat((pov&&pov.fov)!=null?pov.fov:(pov&&pov.field_of_view)!=null?pov.field_of_view:(pov&&pov.angle)!=null?pov.angle:(item.fov!=null?item.fov:item.field_of_view)); if(!isFinite(fov)){ var pano=!!(pov&&pov.panoramic||pov&&pov.panorama||item.panoramic||item.panorama); var half=!!(pov&&pov.half||item.half||pov&&pov.semicircle); fov=pano?360:(half?180:90); }
-          out.push({ type:'Feature', geometry:{ type:'Point', coordinates:[lon,lat] }, properties:{ id:String(item.id||(title+':'+lon+','+lat)), title:title, url:url, place:(item.label||item.address||''), thumb:thumb, bearing:bearing, fov:fov } }); }
+          return json.features.filter(f=>f && f.geometry && f.geometry.type==='Point');
+        }
+        const out=[]; if(Array.isArray(json)){
+          for(let i=0;i<json.length;i++){
+            const item=json[i];
+            const lon=parseFloat(item.longitude!=null?item.longitude:item.lon);
+            const lat=parseFloat(item.latitude!=null?item.latitude:item.lat);
+            if(!isFinite(lon)||!isFinite(lat)) continue;
+            const povs=Array.isArray(item.point_of_views)?item.point_of_views:[]; let pov=null;
+            for(let k=0;k<povs.length;k++){ if(povs[k] && povs[k].type==='image'){ pov=povs[k]; break; } }
+            if(!pov && povs.length) pov=pov||{};
+            const title=(pov && pov.title) || item.label || 'Webcam';
+            const url=(pov && pov.url) || '#';
+            const thumb=(pov && ((pov.type==='video'&&pov.preview&&pov.preview.thumb)?pov.preview.thumb:(pov.latest_media&&pov.latest_media.thumb&&!/\.mp4$/i.test(pov.latest_media.thumb))?pov.latest_media.thumb:(pov.preview&&pov.preview.thumb)?pov.preview.thumb:'')) || '';
+            let bearing=parseFloat((pov&&pov.bearing)!=null?pov.bearing:(pov&&pov.direction)!=null?pov.direction:(pov&&pov.heading)!=null?pov.heading:(pov&&pov.azimuth)!=null?pov.azimuth:(item.bearing!=null?item.bearing:item.direction)); if(!isFinite(bearing)) bearing=0;
+            let fov=parseFloat((pov&&pov.fov)!=null?pov.fov:(pov&&pov.field_of_view)!=null?pov.field_of_view:(pov&&pov.angle)!=null?pov.angle:(item.fov!=null?item.fov:item.field_of_view));
+            if(!isFinite(fov)){ const pano=!!(pov&&pov.panoramic||pov&&pov.panorama||item.panoramic||item.panorama); const half=!!(pov&&pov.half||item.half||pov&&pov.semicircle); fov=pano?360:(half?180:90); }
+            out.push({ type:'Feature', geometry:{ type:'Point', coordinates:[lon,lat] },
+              properties:{ id:String(item.id||(title+':'+lon+','+lat)), title, url, place:(item.label||item.address||''), thumb, bearing, fov } });
+          }
         }
         return out;
       })(data);
       if(!features.length){ console.warn('No webcam points found in skaping_webcam.json'); return; }
-      var fc={ type:'FeatureCollection', features:features };
+      const fc={ type:'FeatureCollection', features:features };
       map.addSource('webcams', { type:'geojson', data:fc, cluster:true, clusterMaxZoom:14, clusterRadius:60 });
       map.addLayer({ id:'ml-clusters', type:'circle', source:'webcams', filter:['has','point_count'], paint:{ 'circle-radius':1, 'circle-opacity':0 } });
       map.addLayer({ id:'ml-unclustered', type:'circle', source:'webcams', filter:['!', ['has','point_count']], paint:{ 'circle-radius':1, 'circle-opacity':0 } });
 
-      // Refuges — utiliser le GeoJSON ENRICHED
-      fetch('refuges_enriched.json').then(r=>r.json()).then(function(refData){
+      fetch('refuges_enriched.json').then(r=>r.json()).then(refData=>{
         map.addSource('refuges', { type:'geojson', data:refData, cluster:true, clusterMaxZoom:14, clusterRadius:60 });
         map.addLayer({ id:'rf-clusters', type:'circle', source:'refuges', filter:['has','point_count'], paint:{ 'circle-radius':1, 'circle-opacity':0 } });
         map.addLayer({ id:'rf-unclustered', type:'circle', source:'refuges', filter:['!', ['has','point_count']], paint:{ 'circle-radius':1, 'circle-opacity':0 } });
 
+        // DOM overlays (markers) initialisation
         initDomOverlays();
 
+        // Fit si pas de hash
         if(!hadHash){
-          var b=new maplibregl.LngLatBounds();
-          features.forEach(function(ft){ b.extend(ft.geometry.coordinates); });
-          (refData.features||[]).forEach(function(ft){ if(ft && ft.geometry && ft.geometry.type==='Point'){ b.extend(ft.geometry.coordinates); } });
+          const b=new maplibregl.LngLatBounds();
+          features.forEach(ft=>b.extend(ft.geometry.coordinates));
+          (refData.features||[]).forEach(ft=>{ if(ft && ft.geometry && ft.geometry.type==='Point'){ b.extend(ft.geometry.coordinates); } });
           map.fitBounds(b, { padding:60, maxZoom:11 });
         }
       });
-    }).catch(function(err){ console.error('Failed to load skaping_webcam.json', err); });
+    }).catch(err=>console.error('Failed to load skaping_webcam.json', err));
+
+    // écouteurs pour le hover
   });
 
-  map.on('moveend', updateHashLater); map.on('zoomend', updateHashLater);
-  map.on('error', function(e){ console.error('MapLibre error:', (e && e.error) || e); });
+  // erreurs map
+  map.on('error', e => console.error('MapLibre error:', (e && e.error) || e));
 })();
 </script>
 </body>
